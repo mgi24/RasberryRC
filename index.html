@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Camera Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 80px 80px 80px;
+            grid-template-rows: 80px 80px 80px;
+            gap: 10px;
+        }
+
+        button {
+            font-size: 1.2em;
+            padding: 20px;
+            border: none;
+            border-radius: 8px;
+            background: #2196f3;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:active,
+        button.active {
+            background: #1769aa;
+        }
+
+        .empty {
+            background: transparent;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Camera Control</h2>
+    <div style="display: flex; flex-direction: column; align-items: center;">
+        <img id="stream" src="" alt="Camera Stream"
+            style="width:1000px; max-width:100vw; background:#222; margin-bottom:30px; border-radius:12px; box-shadow:0 2px 16px #0004;">
+        <div class="controls">
+            <div class="empty"></div>
+            <button id="forward">▲<br>Forward<br>(W)</button>
+            <div class="empty"></div>
+            <button id="left">◀<br>Left<br>(A)</button>
+            <div class="empty"></div>
+            <button id="right">▶<br>Right<br>(D)</button>
+            <div class="empty"></div>
+            <button id="backward">▼<br>Backward<br>(S)</button>
+            <div class="empty"></div>
+        </div>
+    </div>
+    <script>
+        // WebSocket for both MJPEG stream and GPIO control
+        const ws = new WebSocket('ws://192.168.0.101:8765');
+        ws.binaryType = "blob";
+        const streamImg = document.getElementById('stream');
+
+        ws.onopen = function () {
+            try {
+                ws.send("web");
+                // Kirim "1" setiap 200ms untuk heartbeat
+                setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send("1");
+                    }
+                }, 80);
+            } catch (e) {
+                console.error("Gagal mengirim identitas:", e);
+            }
+        };
+
+        ws.onmessage = async (event) => {
+            if (event.data instanceof Blob) {
+                try {
+                    const head = new Uint8Array(await event.data.slice(0, 1).arrayBuffer())[0];
+                    if (head === 0x01) {
+                        const imgBlob = event.data.slice(1); // strip marker byte
+                        const url = URL.createObjectURL(imgBlob);
+                        streamImg.src = url;
+                        streamImg.onload = () => URL.revokeObjectURL(url);
+                    }
+                } catch (e) {
+                    console.error('Failed to process binary message:', e);
+                }
+            }
+        };
+
+        ws.onclose = () => {
+            alert('WebSocket connection closed');
+        };
+        ws.onerror = () => {
+            alert('WebSocket error');
+        };
+
+        // GPIO control logic
+        const pins = { forward: 0, backward: 0, left: 0, right: 0 };
+
+        function sendPins() {
+            if (ws.readyState === 1) ws.send(JSON.stringify(pins));
+        }
+
+        const keyMap = {
+            'w': 'forward',
+            'a': 'left',
+            's': 'backward',
+            'd': 'right'
+        };
+
+        const pressed = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false
+        };
+
+        function updateMotion() {
+            // Forward/Backward: only one can be active, prioritize last pressed
+            if (pressed.forward && pressed.backward) {
+                if (pressed._lastFB === 'forward') {
+                    pins.forward = 1; pins.backward = 0;
+                } else {
+                    pins.forward = 0; pins.backward = 1;
+                }
+            } else {
+                pins.forward = pressed.forward ? 1 : 0;
+                pins.backward = pressed.backward ? 1 : 0;
+            }
+            // Left/Right: only one can be active, prioritize last pressed
+            if (pressed.left && pressed.right) {
+                if (pressed._lastLR === 'left') {
+                    pins.left = 1; pins.right = 0;
+                } else {
+                    pins.left = 0; pins.right = 1;
+                }
+            } else {
+                pins.left = pressed.left ? 1 : 0;
+                pins.right = pressed.right ? 1 : 0;
+            }
+
+            sendPins();
+
+            // Update button UI
+            ['forward', 'backward', 'left', 'right'].forEach(dir => {
+                const btn = document.getElementById(dir);
+                if (pins[dir]) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        ['forward', 'backward', 'left', 'right'].forEach(dir => {
+            const btn = document.getElementById(dir);
+
+            function press() {
+                pressed[dir] = true;
+                if (dir === 'forward' || dir === 'backward') pressed._lastFB = dir;
+                if (dir === 'left' || dir === 'right') pressed._lastLR = dir;
+                updateMotion();
+            }
+            function release() {
+                pressed[dir] = false;
+                updateMotion();
+            }
+
+            btn.addEventListener('mousedown', press);
+            btn.addEventListener('mouseup', release);
+            btn.addEventListener('mouseleave', release);
+            btn.addEventListener('touchstart', e => {
+                e.preventDefault();
+                press();
+            }, { passive: false });
+            btn.addEventListener('touchend', e => {
+                e.preventDefault();
+                release();
+            }, { passive: false });
+        });
+
+        window.addEventListener('keydown', e => {
+            const dir = keyMap[e.key.toLowerCase()];
+            if (dir && !pressed[dir]) {
+                pressed[dir] = true;
+                if (dir === 'forward' || dir === 'backward') pressed._lastFB = dir;
+                if (dir === 'left' || dir === 'right') pressed._lastLR = dir;
+                updateMotion();
+            }
+        });
+        window.addEventListener('keyup', e => {
+            const dir = keyMap[e.key.toLowerCase()];
+            if (dir) {
+                pressed[dir] = false;
+                updateMotion();
+            }
+        });
+    </script>
+</body>
+
+</html>

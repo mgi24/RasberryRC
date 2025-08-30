@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>WebSocket MJPEG Stream</title>
+</head>
+
+<body>
+  <h2>Live Stream</h2>
+  KLIK UNTUK MENDENGARKAN
+  <img id="stream" width="640" height="480" alt="Stream akan tampil di sini">
+  <script>
+    const ws = new WebSocket("ws://192.168.0.101:8765/");
+    const img = document.getElementById("stream");
+    ws.binaryType = "arraybuffer";
+
+    // Audio setup
+    let audioCtx = null;
+    let audioQueue = [];
+    let playing = false;
+    const SR = 16000;
+    const MAX_QUEUE_SEC = 1.0;
+    let queuedSamples = 0;
+
+    // Aktifkan AudioContext setelah user klik
+    window.addEventListener('click', () => {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+    }, { once: true });
+
+    function playAudio() {
+      if (!audioCtx || audioQueue.length === 0 || playing) return;
+      playing = true;
+      const f32 = audioQueue.shift();
+      queuedSamples -= f32.length;
+      const buf = audioCtx.createBuffer(1, f32.length, SR);
+      buf.getChannelData(0).set(f32);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      src.onended = () => { playing = false; playAudio(); };
+      src.start();
+    }
+
+    ws.onopen = function () {
+      try {
+        ws.send("web");
+      } catch (e) {
+        console.error("Gagal mengirim identitas:", e);
+      }
+    };
+
+    ws.onmessage = async function (event) {
+      try {
+        let buffer;
+        if (event.data instanceof ArrayBuffer) {
+          buffer = event.data;
+        } else if (event.data instanceof Blob) {
+          buffer = await event.data.arrayBuffer();
+        } else {
+          return;
+        }
+
+        if (buffer.byteLength < 2) return;
+
+        const view = new Uint8Array(buffer);
+        const type = view[0];
+
+        if (type === 0x01) {
+          const jpegData = buffer.slice(1);
+          const blob = new Blob([jpegData], { type: "image/jpeg" });
+          const url = URL.createObjectURL(blob);
+          img.src = url;
+          img.onload = () => URL.revokeObjectURL(url);
+        } else if (type === 0x02) {
+          console.log("new package");
+          if (!audioCtx) return;
+          const payload = new Uint8Array(buffer, 1);
+            if (payload.byteLength < 4) {
+            console.warn("Payload audio kurang dari 4 byte:", payload.byteLength);
+            return;
+            }
+          // Salin ke buffer baru agar offset = 0 (aligned)
+          const aligned = new Uint8Array(payload.length);
+          aligned.set(payload);
+          const i32 = new Int32Array(aligned.buffer, 0, aligned.length >> 2);
+          const n = i32.length;
+          const f32 = new Float32Array(n);
+          const DEN = Math.pow(2, 31);
+          for (let i = 0; i < n; i++) {
+            let v = i32[i] / DEN;
+            if (v > 1) v = 1;
+            else if (v < -1) v = -1;
+            f32[i] = v;
+          }
+          queuedSamples += f32.length;
+          const maxSamples = Math.floor(MAX_QUEUE_SEC * SR);
+          while (queuedSamples > maxSamples && audioQueue.length > 0) {
+            queuedSamples -= audioQueue.shift().length;
+          }
+          audioQueue.push(f32);
+          playAudio();
+        }
+      } catch (e) {
+        console.error("Gagal memproses pesan:", e);
+      }
+    };
+
+    ws.onclose = function () {
+      alert("WebSocket closed");
+    };
+    ws.onerror = function (e) {
+      alert("WebSocket error");
+    };
+  </script>
+</body>
+
+</html>
