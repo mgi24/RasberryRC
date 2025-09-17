@@ -17,7 +17,7 @@ BYTES_PER_SAMPLE = 4   # 4 utk S32_LE, 2 utk S16_LE
 CHUNK_SIZE = CHUNK_FRAMES * CHANNELS * BYTES_PER_SAMPLE
 
 MAX_QUEUE_CHUNKS = 15  # ~300 ms max buffer (15 * 20ms)
-SHIFT_BITS = 16 
+
 async def stream_once():
     proc = await asyncio.create_subprocess_exec(
         "arecord",
@@ -61,6 +61,7 @@ async def stream_once():
 
         async def consumer():
             GAIN_DB = 8.0
+            SHIFT_BITS = 16 
             GAIN = 10 ** (GAIN_DB / 20.0)  # ≈ 2.512
             while True:
                 chunk = await q.get()

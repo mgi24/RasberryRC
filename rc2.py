@@ -61,7 +61,7 @@ def set_lines(lines, value):
 last_heartbeat = time.monotonic()
 exposure = 10000
 
-VPS_WS_URL = "ws://202.10.36.200:8765"
+VPS_WS_URL = "ws://IPVPS:8765"
 active_cam = 1
 async def send_frames(ws):
     try:

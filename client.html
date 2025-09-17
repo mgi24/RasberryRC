@@ -1,0 +1,241 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebRTC Viewer</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #111; color: #eee; }
+      video { width: 100%; max-width: 640px; background: #000; }
+      .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+      input, button { padding: 8px; }
+      input { width: 380px; }
+
+      /* WASD controls */
+      .pad { display: grid; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(3, 56px); gap: 8px; margin-top: 12px; align-items: center; justify-content: center; }
+      .pad .sp { visibility: hidden; }
+      .pad button { background: #222; color: #ddd; border: 1px solid #444; border-radius: 6px; font-weight: 600; cursor: pointer; }
+      .pad button.active { background: #0a7; border-color: #0c9; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <label>Signaling URL:</label>
+      <input id="wsurl" value="ws://192.168.0.101:8766" />
+      <button id="connect">Connect</button>
+    </div>
+    <video id="video" autoplay controls playsinline></video>
+
+    <!-- Exposure slider -->
+    <div class="row">
+      <label for="exposure">Exposure (µs):</label>
+      <input id="exposure" type="range" min="100" max="1000000" step="100" value="10000" />
+      <span id="exposureVal">10000</span>
+      <button id="applyExposure">Apply</button>
+    </div>
+
+    <!-- WASD control buttons -->
+    <div class="pad">
+      <span class="sp"></span>
+      <button id="forward">W</button>
+      <span class="sp"></span>
+      <button id="left">A</button>
+      <button id="backward">S</button>
+      <button id="right">D</button>
+      <span class="sp"></span>
+      <span class="sp"></span>
+      <span class="sp"></span>
+    </div>
+
+    <script>
+      const vid = document.getElementById('video');
+      const btn = document.getElementById('connect');
+      const wsInput = document.getElementById('wsurl');
+
+      let pc;
+      let ws;
+      const clientId = Math.random().toString(36).slice(2, 10);
+      // Heartbeat timer
+      let heartbeatTimer = null;
+
+      // Exposure UI refs
+      const expSlider = document.getElementById('exposure');
+      const expVal = document.getElementById('exposureVal');
+      const expApplyBtn = document.getElementById('applyExposure');
+      expVal.textContent = expSlider.value;
+
+      function sendExposure(value) {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "exposure", client_id: clientId, value: Number(value) }));
+        }
+      }
+
+      // Debounce pengiriman saat slider digeser
+      let expDebounce = null;
+      expSlider.addEventListener('input', () => {
+        expVal.textContent = expSlider.value;
+        if (expDebounce) clearTimeout(expDebounce);
+        expDebounce = setTimeout(() => sendExposure(expSlider.value), 100);
+      });
+      // Tombol Apply untuk kirim eksplisit
+      expApplyBtn.addEventListener('click', () => sendExposure(expSlider.value));
+
+      async function start() {
+        // bersihkan heartbeat lama jika ada
+        if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+        if (ws) { try { ws.close(); } catch (_) {} }
+        ws = new WebSocket(wsInput.value);
+        ws.onopen = async () => {
+          ws.send(JSON.stringify({ type: 'register', role: 'client', client_id: clientId }));
+
+          // Mulai heartbeat tiap 50ms
+          heartbeatTimer = setInterval(() => {
+            if (ws && ws.readyState === 1) {
+              try { ws.send(JSON.stringify({ type: "ping", client_id: clientId, ts: Date.now() })); } catch {}
+            }
+          }, 50);
+
+          pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+          pc.ontrack = (e) => {
+            // Hint low-latency di receiver (Chrome/Edge modern)
+            try {
+              if (e.receiver && 'playoutDelayHint' in e.receiver) {
+                e.receiver.playoutDelayHint = 0.05; // ~50ms
+              }
+            } catch {}
+            if (e.streams && e.streams[0]) vid.srcObject = e.streams[0];
+            else { const ms = new MediaStream(); ms.addTrack(e.track); vid.srcObject = ms; }
+          };
+
+          pc.onicecandidate = (e) => {
+            if (e.candidate) {
+              ws.send(JSON.stringify({
+                type: 'candidate', from: 'client', client_id: clientId, candidate: e.candidate
+              }));
+            }
+          };
+
+          const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+          await pc.setLocalDescription(offer);
+          ws.send(JSON.stringify({ type: 'offer', client_id: clientId, sdp: { type: offer.type, sdp: offer.sdp } }));
+
+          // Kirim exposure awal
+          sendExposure(expSlider.value);
+        };
+
+        ws.onmessage = async (ev) => {
+          const data = JSON.parse(ev.data);
+          if (data.type === 'answer') {
+            const s = data.sdp;
+            const desc = { type: s.type || 'answer', sdp: s.sdp };
+            await pc.setRemoteDescription(desc);
+          } else if (data.type === 'candidate') {
+            if (data.candidate) {
+              try { await pc.addIceCandidate(data.candidate); } catch (err) { console.warn(err); }
+            }
+          }
+        };
+
+        ws.onerror = () => {
+          if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+        };
+
+        ws.onclose = () => {
+          console.log('Signaling closed');
+          if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+          zeroPins(); // pastikan berhenti saat koneksi signaling terputus
+        };
+      }
+
+      btn.onclick = start;
+
+      // ===== WASD control logic =====
+      const pins = { forward: 0, backward: 0, left: 0, right: 0 };
+
+      function sendPins() {
+        if (ws && ws.readyState === 1) {
+          // Kompatibel dengan Python PI: kirim field top-level dan juga payload
+          ws.send(JSON.stringify({
+            type: 'control',
+            client_id: clientId,
+            ...pins,              // forward/backward/left/right di top-level
+            payload: { ...pins }, // juga dikirim sebagai payload
+          }));
+        }
+      }
+
+      const keyMap = { 'w': 'forward', 'a': 'left', 's': 'backward', 'd': 'right' };
+
+      const pressed = { forward: false, backward: false, left: false, right: false, _lastFB: undefined, _lastLR: undefined };
+
+      function updateMotion() {
+        // Forward/Backward: only one can be active, prioritize last pressed
+        if (pressed.forward && pressed.backward) {
+          if (pressed._lastFB === 'forward') { pins.forward = 1; pins.backward = 0; }
+          else { pins.forward = 0; pins.backward = 1; }
+        } else {
+          pins.forward = pressed.forward ? 1 : 0;
+          pins.backward = pressed.backward ? 1 : 0;
+        }
+        // Left/Right: only one can be active, prioritize last pressed
+        if (pressed.left && pressed.right) {
+          if (pressed._lastLR === 'left') { pins.left = 1; pins.right = 0; }
+          else { pins.left = 0; pins.right = 1; }
+        } else {
+          pins.left = pressed.left ? 1 : 0;
+          pins.right = pressed.right ? 1 : 0;
+        }
+
+        sendPins();
+
+        // Update button UI
+        ['forward', 'backward', 'left', 'right'].forEach(dir => {
+          const el = document.getElementById(dir);
+          if (el) { if (pins[dir]) el.classList.add('active'); else el.classList.remove('active'); }
+        });
+      }
+
+      function zeroPins() {
+        pressed.forward = pressed.backward = pressed.left = pressed.right = false;
+        pins.forward = pins.backward = pins.left = pins.right = 0;
+        updateMotion();
+      }
+
+      ;['forward','backward','left','right'].forEach(dir => {
+        const btnEl = document.getElementById(dir); if (!btnEl) return;
+        const press = () => { pressed[dir] = true; if (dir==='forward'||dir==='backward') pressed._lastFB = dir; if (dir==='left'||dir==='right') pressed._lastLR = dir; updateMotion(); };
+        const release = () => { pressed[dir] = false; updateMotion(); };
+        btnEl.addEventListener('mousedown', press);
+        btnEl.addEventListener('mouseup', release);
+        btnEl.addEventListener('mouseleave', release);
+        btnEl.addEventListener('touchstart', e => { e.preventDefault(); press(); }, { passive: false });
+        btnEl.addEventListener('touchend', e => { e.preventDefault(); release(); }, { passive: false });
+      });
+
+      window.addEventListener('keydown', e => {
+        const dir = keyMap[e.key.toLowerCase()];
+        if (dir) {
+          e.preventDefault();
+          if (!pressed[dir]) {
+            pressed[dir] = true;
+            if (dir === 'forward' || dir === 'backward') pressed._lastFB = dir;
+            if (dir === 'left' || dir === 'right') pressed._lastLR = dir;
+            updateMotion();
+          }
+        }
+      });
+      window.addEventListener('keyup', e => {
+        const dir = keyMap[e.key.toLowerCase()];
+        if (dir) {
+          e.preventDefault();
+          pressed[dir] = false;
+          updateMotion();
+        }
+      });
+
+      // Safety: lepaskan semua saat tab kehilangan fokus
+      window.addEventListener('blur', zeroPins);
+    </script>
+  </body>
+</html>
