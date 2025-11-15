@@ -77,7 +77,10 @@ async def handler(ws):
                 # jika PI mengirim control, abaikan
                 continue
 
-        
+            if mtype == "light":
+                if ws is not PI_WS and PI_WS is not None:
+                    await PI_WS.send(json.dumps(data))
+                continue
 
     finally:
         if ws is PI_WS:

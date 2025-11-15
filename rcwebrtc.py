@@ -20,7 +20,7 @@ from aiortc import (
 from aiortc.sdp import candidate_from_sdp
 from aiortc.rtcrtpsender import RTCRtpSender
 
-SIGNALING_URL = os.getenv("SIGNALING_URL", "ws://192.168.0.101:8766")
+SIGNALING_URL = os.getenv("SIGNALING_URL", "ws://168.110.218.135:8766")
 import gpiod
 # GPIO pin mapping
 PINS = {
@@ -188,8 +188,8 @@ class ArecordAudioTrack(AudioStreamTrack):
 exposure = 10000
 def make_camera_track(
     device_index: int = 0,
-    width: int = 426,
-    height: int = 240,
+    width: int = 142,   # 142x80 = 16:9 aspect ratio (80p)
+    height: int = 80,
     fps: int = 24,
     preview: bool = False,
 ) -> VideoStreamTrack:
@@ -205,7 +205,12 @@ def make_camera_track(
             )
             self.picam2.configure(config)
             self.picam2.start()
-            self.picam2.set_controls({"AfMode": 2, "AeEnable": False})
+            self.picam2.set_controls({
+                "AfMode": 0,        # Manual focus (0=manual, 2=auto)
+                "LensPosition": 0.0, # 0.0=infinite focus, 10.0=closest focus
+                "AeEnable": False,
+                "ExposureTime": exposure
+            })
 
             # Kamera kedua (kamera 1)
             self.picam2_2 = Picamera2(0)
@@ -215,7 +220,12 @@ def make_camera_track(
             )
             self.picam2_2.configure(config2)
             self.picam2_2.start()
-
+            self.picam2_2.set_controls({
+                "AfMode": 0,        # Manual focus
+                "LensPosition": 0.0, # Focus ke infinity
+                "AeEnable": False,
+                "ExposureTime": exposure
+            })
             self._ts = 0
             self._time_base = Fraction(1, max(1, fps))
             self._frame_interval = 1.0 / max(1, fps)
@@ -341,7 +351,7 @@ async def heartbeat_watcher():
     global last_heartbeat
     while True:
         if time.monotonic() - last_heartbeat > 0.5:
-            print("Heartbeat lost, stopping motors")
+            # print("Heartbeat lost, stopping motors")
             set_lines(lines, 0)
         await asyncio.sleep(0.05)
 
@@ -349,6 +359,7 @@ async def run():
     # Ubah width/height/fps di sini untuk membatasi stream
     camera_track = make_camera_track(width=426, height=240, fps=24, preview=False)
     pcs: dict[str, RTCPeerConnection] = {}
+    heartbeat_task = asyncio.create_task(heartbeat_watcher())
 
     async with websockets.connect(SIGNALING_URL) as ws:
         await ws.send(json.dumps({"type": "register", "role": "pi"}))
@@ -397,6 +408,7 @@ async def run():
                         print(f"Exposure setting error: {e}")
                     
         finally:
+            heartbeat_task.cancel()
             for pc in list(pcs.values()):
                 await pc.close()
             pcs.clear()

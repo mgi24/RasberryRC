@@ -33,6 +33,11 @@
       <span id="exposureVal">10000</span>
       <button id="applyExposure">Apply</button>
     </div>
+    <!-- Light toggle -->
+      <div class="row">
+        <label for="light">Light:</label>
+        <input id="light" type="checkbox" />
+      </div>
 
     <!-- WASD control buttons -->
     <div class="pad">
@@ -51,7 +56,8 @@
       const vid = document.getElementById('video');
       const btn = document.getElementById('connect');
       const wsInput = document.getElementById('wsurl');
-
+      const lightCb = document.getElementById('light');
+      
       let pc;
       let ws;
       const clientId = Math.random().toString(36).slice(2, 10);
@@ -88,6 +94,15 @@
         ws.onopen = async () => {
           ws.send(JSON.stringify({ type: 'register', role: 'client', client_id: clientId }));
 
+          // Kirim status awal lampu
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({
+              type: 'light',
+              client_id: clientId,
+              value: lightCb.checked ? 1 : 0
+            }));
+          }
+
           // Mulai heartbeat tiap 50ms
           heartbeatTimer = setInterval(() => {
             if (ws && ws.readyState === 1) {
@@ -116,7 +131,7 @@
             }
           };
 
-          const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
+          const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: false });
           await pc.setLocalDescription(offer);
           ws.send(JSON.stringify({ type: 'offer', client_id: clientId, sdp: { type: offer.type, sdp: offer.sdp } }));
 
@@ -164,6 +179,22 @@
           }));
         }
       }
+
+      // Light checkbox -> pesan type "light"
+      lightCb.addEventListener('change', () => {
+        console.log('Light checkbox changed:', lightCb.checked);
+        if (ws && ws.readyState === 1) {
+          const msg = {
+        type: 'light',
+        client_id: clientId,
+        value: lightCb.checked ? 1 : 0
+          };
+          console.log('Sending light message:', msg);
+          ws.send(JSON.stringify(msg));
+        } else {
+          console.warn('WebSocket not ready. State:', ws ? ws.readyState : 'null');
+        }
+      });
 
       const keyMap = { 'w': 'forward', 'a': 'left', 's': 'backward', 'd': 'right' };
 
