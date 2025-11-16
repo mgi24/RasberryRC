@@ -20,7 +20,7 @@ from aiortc import (
 from aiortc.sdp import candidate_from_sdp
 from aiortc.rtcrtpsender import RTCRtpSender
 
-SIGNALING_URL = os.getenv("SIGNALING_URL", "ws://192.168.0.100:8766")
+SIGNALING_URL = os.getenv("SIGNALING_URL", "ws://168.110.218.135:8766")
 import gpiod
 # GPIO pin mapping
 PINS = {
@@ -92,9 +92,8 @@ def make_camera_track(
             await asyncio.sleep(self._frame_interval)
             # Ambil frame dari kedua kamera
             frame1 = self.picam2.capture_array()
-            frame2 = cv2.flip(frame1, -1)
             # Gabung horizontal
-            video_frame = av.VideoFrame.from_ndarray(frame2, format="bgr24")
+            video_frame = av.VideoFrame.from_ndarray(frame1, format="bgr24")
             video_frame.pts = self._ts
             video_frame.time_base = self._time_base
             self._ts += 1
