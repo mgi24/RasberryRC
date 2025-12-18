@@ -156,6 +156,23 @@
       console.log("[AUDIO] state =", audioCtx.state);
     }
 
+    // Resample linear sederhana (cukup untuk voice, testing)
+    function resampleLinear(input, inRate, outRate) {
+      if (inRate === outRate) return input;
+      const ratio = outRate / inRate;
+      const outLen = Math.max(1, Math.floor(input.length * ratio));
+      const out = new Float32Array(outLen);
+
+      for (let i = 0; i < outLen; i++) {
+        const x = i / ratio;
+        const x0 = Math.floor(x);
+        const x1 = Math.min(input.length - 1, x0 + 1);
+        const t = x - x0;
+        out[i] = (1 - t) * input[x0] + t * input[x1];
+      }
+      return out;
+    }
+
     // ===== WS connect/disconnect =====
     function connect() {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -221,10 +238,15 @@
 
         // Audio PCM from Pi
         if (tag === AUDIO_TAG) {
-            const pcmU8 = arr.slice(1);
-            const f32 = pcmS16leToFloat32(pcmU8);
-            pushAudio(f32);
-            return;
+          const pcmU8 = arr.slice(1);
+          const f32_16k = pcmS16leToFloat32(pcmU8);
+
+          // RESAMPLE 16k (Pi) -> output device rate (biasanya 48k)
+          const outRate = audioCtx ? audioCtx.sampleRate : AUDIO_RATE;
+          const f32_out = resampleLinear(f32_16k, AUDIO_RATE, outRate);
+
+          pushAudio(f32_out);
+          return;
         }
       };
 
