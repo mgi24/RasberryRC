@@ -11,6 +11,7 @@ async def handler(ws):
         async for message in ws:
             try:
                 data = json.loads(message)
+                print(data)
             except Exception:
                 continue
             

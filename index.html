@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Camera Control</title>
+    <title>Camera Control (Legacy WS)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -12,7 +12,8 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
+            padding: 20px;
         }
 
         .controls {
@@ -42,24 +43,48 @@
             background: transparent;
             pointer-events: none;
         }
+
+        #canvas {
+            background: #222;
+            border-radius: 12px;
+            box-shadow: 0 2px 16px #0004;
+        }
     </style>
 </head>
 
 <body>
-    <h2>Camera Control</h2>
+    <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+        <label for="wsUrl" style="font-weight: bold;">WebSocket URL:</label>
+        <input type="text" id="wsUrl" value="ws://192.168.0.101:8766" 
+            style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 300px; font-size: 1em;">
+        <button id="connectBtn" 
+            style="padding: 8px 20px; font-size: 1em; background: #4caf50; border: none; border-radius: 4px; color: white; cursor: pointer;">
+            Connect
+        </button>
+        <span id="status" style="font-weight: bold; color: #999;">Disconnected</span>
+    </div>
+    <h2>Camera Control (Legacy)</h2>
     <div style="display: flex; flex-direction: column; align-items: center;">
-        <div style="display: flex; gap: 24px; margin-bottom: 30px;">
-            <div style="display: flex; flex-direction: column; align-items: center;">
-                <span style="margin-bottom: 8px;">Camera 1 (WebRTC)</span>
-                <video id="webrtcVideo" autoplay playsinline
-                    style="width:480px; max-width:48vw; background:#222; border-radius:12px; box-shadow:0 2px 16px #0004;"></video>
-                <button id="toggleCam2" style="margin-top: 16px; width: 120px;">Camera 2: OFF</button>
-            </div>
+        <div style="margin-bottom: 20px;">
+            <canvas id="canvas" width="640" height="360"></canvas>
         </div>
         <div style="margin-bottom: 24px; width: 400px; max-width: 90vw;">
             <label for="exposureSlider" style="font-weight: bold;">Exposure:</label>
-            <input type="range" id="exposureSlider" min="0" max="100000" value="0" style="width: 70%; vertical-align: middle;">
-            <span id="exposureValue">0</span>
+            <input type="range" id="exposureSlider" min="100" max="100000" value="10000" 
+                style="width: 70%; vertical-align: middle;">
+            <span id="exposureValue">10000</span>
+        </div>
+        <div style="margin-bottom: 24px; width: 400px; max-width: 90vw;">
+                    <label for="gainSlider" style="font-weight: bold;">Gain (ISO):</label>
+                    <input type="range" id="gainSlider" min="0" max="100000" value="1000" 
+                        style="width: 70%; vertical-align: middle;">
+                    <span id="gainValue">10000</span>
+        </div>
+        <div style="margin-bottom: 24px; width: 400px; max-width: 90vw;">
+            <label style="font-weight: bold;">
+            <input type="checkbox" id="lightCheckbox">
+            Light
+            </label>
         </div>
         <div class="controls">
             <div class="empty"></div>
@@ -74,93 +99,135 @@
         </div>
     </div>
     <script>
-        // WebSocket for GPIO control & heartbeat via signaling server
-        const ws = new WebSocket('ws://192.168.0.101:8766');
-        const videoEl = document.getElementById('webrtcVideo');
-        let camera2On = false;
-
-        ws.onopen = function () {
-            try {
-                // register as client for signaling/control
-                ws.send(JSON.stringify({ type: 'register', role: 'client', client_id: 'browser1' }));
-                setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'control', client_id: 'browser1', payload: '1' }));
-                    }
-                }, 80);
-            } catch (e) {
-                console.error("Gagal mengirim identitas:", e);
-            }
-        };
-
-        // WebRTC: create offer, send via signaling, and set answer
-        let pc;
-        async function startWebRTC() {
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            });
-            pc.ontrack = (e) => {
-                videoEl.srcObject = e.streams[0];
-            };
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    ws.send(JSON.stringify({ type: 'candidate', client_id: 'browser1', candidate: e.candidate }));
-                }
-            };
-            const offer = await pc.createOffer({ offerToReceiveVideo: true });
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: 'offer', client_id: 'browser1', sdp: offer.sdp }));
-        }
-
-        ws.addEventListener('message', async (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'answer' && pc) {
-                    await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
-                } else if (data.type === 'candidate' && pc) {
-                    await pc.addIceCandidate(data.candidate);
-                }
-            } catch {}
-        });
-
-        // kick off webrtc after ws is open
-        ws.addEventListener('open', startWebRTC);
-
-        ws.onclose = () => {
-            alert('WebSocket connection closed');
-        };
-        ws.onerror = () => {
-            alert('WebSocket error');
-        };
-
-        // Camera 2 toggle logic
-        const toggleBtn = document.getElementById('toggleCam2');
-        toggleBtn.addEventListener('click', () => {
-            camera2On = !camera2On;
-            if (ws.readyState === 1) {
-                ws.send(JSON.stringify({ type: 'control', client_id: 'browser1', payload: camera2On ? 'camera2on' : 'camera2off' }));
-            }
-            toggleBtn.textContent = `Camera 2: ${camera2On ? "ON" : "OFF"}`;
-            toggleBtn.style.background = camera2On ? "#43a047" : "#2196f3";
-        });
-
-        // Exposure slider logic
+        //get all variables
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const wsUrlInput = document.getElementById('wsUrl');
+        const connectBtn = document.getElementById('connectBtn');
+        const statusEl = document.getElementById('status');
         const exposureSlider = document.getElementById('exposureSlider');
         const exposureValue = document.getElementById('exposureValue');
+
+        let ws = null;
+        //connect ws
+        function connect() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            const url = wsUrlInput.value.trim();
+            if (!url) {
+                alert('Please enter WebSocket URL');
+                return;
+            }
+
+            statusEl.textContent = 'Connecting...';
+            statusEl.style.color = '#ff9800';
+            ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = () => {
+                console.log('Connected to', url);
+                statusEl.textContent = 'Connected';
+                statusEl.style.color = '#4caf50';
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.style.background = '#f44336';
+
+                // Identify as client
+                ws.send('client');
+
+                // Send heartbeat every 80ms
+                heartbeatInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send('1');
+                    }
+                }, 80);
+
+                // Send initial exposure
+                ws.send(`exposure${exposureSlider.value}`);
+            };
+
+            //handle messages
+            ws.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    const arr = new Uint8Array(event.data);
+                    if (arr[0] === 0x01) {
+                        // MJPEG frame
+                        const blob = new Blob([arr.slice(1)], { type: 'image/jpeg' });
+                        const img = new Image();
+                        img.onload = () => {
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            URL.revokeObjectURL(img.src);
+                        };
+                        img.src = URL.createObjectURL(blob);
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+                statusEl.textContent = 'Disconnected';
+                statusEl.style.color = '#999';
+                connectBtn.textContent = 'Connect';
+                connectBtn.style.background = '#4caf50';
+                if (heartbeatInterval) {
+                    clearInterval(heartbeatInterval);
+                    heartbeatInterval = null;
+                }
+                // Stop all motors on disconnect
+                pins.forward = pins.backward = pins.left = pins.right = 0;
+                updateMotion();
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                statusEl.textContent = 'Error';
+                statusEl.style.color = '#f44336';
+            };
+        }
+
+        connectBtn.addEventListener('click', connect);
+
+        let heartbeatInterval = null;
+
+        // Exposure slider
         exposureSlider.addEventListener('input', () => {
             exposureValue.textContent = exposureSlider.value;
         });
         exposureSlider.addEventListener('change', () => {
-            if (ws.readyState === 1) {
-                ws.send(JSON.stringify({ type: 'control', client_id: 'browser1', payload: `exposure${exposureSlider.value}` }));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(`exposure${exposureSlider.value}`);
             }
         });
+        // Gain slider
+        const gainSlider = document.getElementById('gainSlider');
+        const gainValue = document.getElementById('gainValue');
 
+        gainSlider.addEventListener('input', () => {
+            gainValue.textContent = gainSlider.value;
+        });
+        gainSlider.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(`gain${gainSlider.value}`);
+            }
+        });
+        // Light checkbox
+        const lightCheckbox = document.getElementById('lightCheckbox');
+
+        lightCheckbox.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const value = lightCheckbox.checked ? '1' : '0';
+                ws.send(`light${value}`);
+            }
+        });
         // GPIO control logic
         const pins = { forward: 0, backward: 0, left: 0, right: 0 };
 
         function sendPins() {
-            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'control', client_id: 'browser1', payload: pins }));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(pins));
+            }
         }
 
         const keyMap = {
@@ -256,6 +323,12 @@
                 pressed[dir] = false;
                 updateMotion();
             }
+        });
+
+        window.addEventListener('blur', () => {
+            // Stop all on window blur
+            pressed.forward = pressed.backward = pressed.left = pressed.right = false;
+            updateMotion();
         });
     </script>
 </body>
