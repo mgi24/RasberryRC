@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Camera Control (Legacy WS)</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f4f4; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
+    .controls { display:grid; grid-template-columns:80px 80px 80px; grid-template-rows:80px 80px 80px; gap:10px; }
+    button { font-size:1.2em; padding:20px; border:none; border-radius:8px; background:#2196f3; color:#fff; cursor:pointer; transition:background .2s; }
+    button:active, button.active { background:#1769aa; }
+    .empty { background:transparent; pointer-events:none; }
+    #canvas { background:#222; border-radius:12px; box-shadow:0 2px 16px #0004; }
+    .row { margin-bottom: 10px; }
+  </style>
+</head>
+
+<body>
+  <div style="margin-bottom: 20px; display:flex; align-items:center; gap:10px;">
+    <label for="wsUrl" style="font-weight:bold;">WebSocket URL:</label>
+    <input type="text" id="wsUrl" value="ws://168.110.218.135:8766"
+      style="padding:8px 12px; border:1px solid #ccc; border-radius:4px; width:300px; font-size:1em;">
+    <button id="connectBtn"
+      style="padding:8px 20px; font-size:1em; background:#4caf50; border:none; border-radius:4px; color:white; cursor:pointer;">
+      Connect
+    </button>
+    <span id="status" style="font-weight:bold; color:#999;">Disconnected</span>
+  </div>
+
+  <h2>Camera Control (Legacy)</h2>
+
+  <div style="display:flex; flex-direction:column; align-items:center;">
+    <div style="margin-bottom: 20px;">
+      <canvas id="canvas" width="640" height="360"></canvas>
+    </div>
+
+    <div class="row" style="width: 400px; max-width: 90vw;">
+      <label for="exposureSlider" style="font-weight:bold;">Exposure:</label>
+      <input type="range" id="exposureSlider" min="100" max="100000" value="10000" style="width:70%; vertical-align:middle;">
+      <span id="exposureValue">10000</span>
+    </div>
+
+    <div class="row" style="width: 400px; max-width: 90vw;">
+      <label for="gainSlider" style="font-weight:bold;">Gain (ISO):</label>
+      <input type="range" id="gainSlider" min="0" max="100000" value="1000" style="width:70%; vertical-align:middle;">
+      <span id="gainValue">1000</span>
+    </div>
+
+    <div class="row" style="width: 400px; max-width: 90vw;">
+      <label style="font-weight:bold;">
+        <input type="checkbox" id="lightCheckbox">
+        Light
+      </label>
+    </div>
+
+    <div class="controls">
+      <div class="empty"></div>
+      <button id="forward">▲<br>Forward<br>(W)</button>
+      <div class="empty"></div>
+      <button id="left">◀<br>Left<br>(A)</button>
+      <div class="empty"></div>
+      <button id="right">▶<br>Right<br>(D)</button>
+      <div class="empty"></div>
+      <button id="backward">▼<br>Backward<br>(S)</button>
+      <div class="empty"></div>
+    </div>
+  </div>
+
+  <script>
+    // ===== Video UI =====
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // ===== WS UI =====
+    const wsUrlInput = document.getElementById('wsUrl');
+    const connectBtn = document.getElementById('connectBtn');
+    const statusEl = document.getElementById('status');
+
+    // ===== Controls =====
+    const exposureSlider = document.getElementById('exposureSlider');
+    const exposureValue = document.getElementById('exposureValue');
+    const gainSlider = document.getElementById('gainSlider');
+    const gainValue = document.getElementById('gainValue');
+    const lightCheckbox = document.getElementById('lightCheckbox');
+
+    let ws = null;
+    let heartbeatInterval = null;
+
+    // ===== Audio (Pi -> Browser) =====
+    const AUDIO_RATE = 16000; // dari Pi
+    const AUDIO_CH = 1;
+    const AUDIO_TAG = 0x02;
+
+    let audioCtx = null;
+    let scriptNode = null;
+
+    // Ring buffer float32
+    let audioBuf = new Float32Array(0);
+
+    function pcmS16leToFloat32(u8) {
+      const n = (u8.length / 2) | 0;
+      const out = new Float32Array(n);
+      for (let i = 0, j = 0; i < n; i++, j += 2) {
+        const lo = u8[j];
+        const hi = u8[j + 1];
+        let v = (hi << 8) | lo;
+        if (v & 0x8000) v -= 0x10000;
+        out[i] = v / 32768;
+      }
+      return out;
+    }
+
+    function pushAudio(chunkF32) {
+      const merged = new Float32Array(audioBuf.length + chunkF32.length);
+      merged.set(audioBuf, 0);
+      merged.set(chunkF32, audioBuf.length);
+      audioBuf = merged;
+
+      // batasi buffer ~ 1 detik supaya tidak makin delay
+      const max = AUDIO_RATE * 1;
+      if (audioBuf.length > max) {
+        audioBuf = audioBuf.slice(audioBuf.length - max);
+      }
+    }
+
+    async function startAudioPlayback() {
+      if (!audioCtx) {
+        // Jangan paksa sampleRate; beberapa browser akan pakai 48k.
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        console.log("[AUDIO] ctx sampleRate =", audioCtx.sampleRate);
+
+        // ScriptProcessor (legacy) - buffer kecil untuk latency
+        const bufferSize = 1024; // coba 512/1024/2048
+        scriptNode = audioCtx.createScriptProcessor(bufferSize, 0, 1);
+
+        scriptNode.onaudioprocess = (e) => {
+          const out = e.outputBuffer.getChannelData(0);
+          const n = out.length;
+
+          // Kalau ctx.sampleRate bukan 16k, audio akan pitch berubah.
+          // Untuk tes cepat: hanya isi sesuai yang ada (akan terdengar tapi pitch bisa beda).
+          // Setelah ini stabil, kita bisa tambahkan resampling.
+          if (audioBuf.length < n) {
+            out.fill(0);
+            return;
+          }
+          out.set(audioBuf.subarray(0, n));
+          audioBuf = audioBuf.subarray(n);
+        };
+
+        scriptNode.connect(audioCtx.destination);
+      }
+
+      if (audioCtx.state !== "running") {
+        await audioCtx.resume();
+      }
+      console.log("[AUDIO] state =", audioCtx.state);
+    }
+
+    // ===== WS connect/disconnect =====
+    function connect() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+        return;
+      }
+
+      const url = wsUrlInput.value.trim();
+      if (!url) {
+        alert('Please enter WebSocket URL');
+        return;
+      }
+
+      statusEl.textContent = 'Connecting...';
+      statusEl.style.color = '#ff9800';
+
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = async () => {
+        console.log('Connected to', url);
+        statusEl.textContent = 'Connected';
+        statusEl.style.color = '#4caf50';
+        connectBtn.textContent = 'Disconnect';
+        connectBtn.style.background = '#f44336';
+
+        // Start audio output (requires user gesture; this is called from button click)
+        await startAudioPlayback();
+
+        // Identify as client
+        ws.send('client');
+
+        // Heartbeat
+        heartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send('1');
+        }, 80);
+
+        // Send initial settings
+        ws.send(`exposure${exposureSlider.value}`);
+        ws.send(`gain${gainSlider.value}`);
+        ws.send(`light${lightCheckbox.checked ? '1' : '0'}`);
+      };
+
+      ws.onmessage = (event) => {
+        if (!(event.data instanceof ArrayBuffer)) return;
+
+        const arr = new Uint8Array(event.data);
+        if (arr.length < 2) return;
+
+        const tag = arr[0];
+
+        // Video MJPEG
+        if (tag === 0x01) {
+          const blob = new Blob([arr.slice(1)], { type: 'image/jpeg' });
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            URL.revokeObjectURL(img.src);
+          };
+          img.src = URL.createObjectURL(blob);
+          return;
+        }
+
+        // Audio PCM from Pi
+        if (tag === AUDIO_TAG) {
+            const pcmU8 = arr.slice(1);
+            const f32 = pcmS16leToFloat32(pcmU8);
+            pushAudio(f32);
+            return;
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed');
+        statusEl.textContent = 'Disconnected';
+        statusEl.style.color = '#999';
+        connectBtn.textContent = 'Connect';
+        connectBtn.style.background = '#4caf50';
+
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+
+        // Stop all motors on disconnect
+        pins.forward = pins.backward = pins.left = pins.right = 0;
+        updateMotion();
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        statusEl.textContent = 'Error';
+        statusEl.style.color = '#f44336';
+      };
+    }
+
+    connectBtn.addEventListener('click', connect);
+
+    // ===== UI: sliders/checkbox =====
+    exposureSlider.addEventListener('input', () => { exposureValue.textContent = exposureSlider.value; });
+    exposureSlider.addEventListener('change', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(`exposure${exposureSlider.value}`);
+    });
+
+    gainSlider.addEventListener('input', () => { gainValue.textContent = gainSlider.value; });
+    gainSlider.addEventListener('change', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(`gain${gainSlider.value}`);
+    });
+
+    lightCheckbox.addEventListener('change', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(`light${lightCheckbox.checked ? '1' : '0'}`);
+    });
+
+    // ===== GPIO control =====
+    const pins = { forward: 0, backward: 0, left: 0, right: 0 };
+
+    function sendPins() {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(pins));
+    }
+
+    const keyMap = { 'w': 'forward', 'a': 'left', 's': 'backward', 'd': 'right' };
+
+    const pressed = { forward: false, backward: false, left: false, right: false };
+
+    function updateMotion() {
+      if (pressed.forward && pressed.backward) {
+        if (pressed._lastFB === 'forward') { pins.forward = 1; pins.backward = 0; }
+        else { pins.forward = 0; pins.backward = 1; }
+      } else {
+        pins.forward = pressed.forward ? 1 : 0;
+        pins.backward = pressed.backward ? 1 : 0;
+      }
+
+      if (pressed.left && pressed.right) {
+        if (pressed._lastLR === 'left') { pins.left = 1; pins.right = 0; }
+        else { pins.left = 0; pins.right = 1; }
+      } else {
+        pins.left = pressed.left ? 1 : 0;
+        pins.right = pressed.right ? 1 : 0;
+      }
+
+      sendPins();
+
+      ['forward', 'backward', 'left', 'right'].forEach(dir => {
+        const b = document.getElementById(dir);
+        if (pins[dir]) b.classList.add('active');
+        else b.classList.remove('active');
+      });
+    }
+
+    ['forward', 'backward', 'left', 'right'].forEach(dir => {
+      const btn = document.getElementById(dir);
+
+      function press() {
+        pressed[dir] = true;
+        if (dir === 'forward' || dir === 'backward') pressed._lastFB = dir;
+        if (dir === 'left' || dir === 'right') pressed._lastLR = dir;
+        updateMotion();
+      }
+
+      function release() {
+        pressed[dir] = false;
+        updateMotion();
+      }
+
+      btn.addEventListener('mousedown', press);
+      btn.addEventListener('mouseup', release);
+      btn.addEventListener('mouseleave', release);
+
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); press(); }, { passive: false });
+      btn.addEventListener('touchend', (e) => { e.preventDefault(); release(); }, { passive: false });
+    });
+
+    window.addEventListener('keydown', (e) => {
+      const dir = keyMap[e.key.toLowerCase()];
+      if (dir && !pressed[dir]) {
+        pressed[dir] = true;
+        if (dir === 'forward' || dir === 'backward') pressed._lastFB = dir;
+        if (dir === 'left' || dir === 'right') pressed._lastLR = dir;
+        updateMotion();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const dir = keyMap[e.key.toLowerCase()];
+      if (dir) {
+        pressed[dir] = false;
+        updateMotion();
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      pressed.forward = pressed.backward = pressed.left = pressed.right = false;
+      updateMotion();
+    });
+  </script>
+</body>
+</html>

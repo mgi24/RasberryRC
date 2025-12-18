@@ -15,7 +15,7 @@ picam2.configure(config)
 picam2.start()
 picam2.set_controls({"AeEnable": False})  # Matikan autoexposure
 
-
+VPS_WS_URL = "ws://168.110.218.135:8766"
 import gpiod
 import signal
 import sys
@@ -33,7 +33,7 @@ PINS = {
     "backward": 27,
     "left": 22,
     "right": 23,
-    "light":24
+    "light": 24
 }
 
 CHIP_NAME = "gpiochip0"
@@ -54,7 +54,18 @@ def set_lines(lines, value):
 
 exposure = 10000
 gain = 1.0
-VPS_WS_URL = "ws://192.168.0.100:8766"
+
+
+# ===== AUDIO (1 arah: Pi -> WS -> Client) =====
+AUDIO_DEV_IN = "plughw:1,0"     # USB PnP Audio Device (mic)
+AUDIO_RATE = 16000             # Hz
+AUDIO_CH = 1                   # mono
+AUDIO_FRAME_MS = 20            # 20ms per packet (umum untuk low latency)
+AUDIO_BYTES_PER_SAMPLE = 2     # S16_LE
+
+AUDIO_SAMPLES_PER_FRAME = int(AUDIO_RATE * AUDIO_FRAME_MS / 1000)  # 320
+AUDIO_BYTES_PER_FRAME = AUDIO_SAMPLES_PER_FRAME * AUDIO_CH * AUDIO_BYTES_PER_SAMPLE  # 640
+
 
 async def send_frames(ws):
     try:
@@ -70,12 +81,47 @@ async def send_frames(ws):
             await asyncio.sleep(0.05)  # ~20fps
     except Exception as e:
         print(f"Stream error: {e}")
-        
+
+
+async def send_audio(ws):
+    """
+    Capture mic PCM via arecord dan kirim ke WS sebagai binary:
+      0x02 + PCM(20ms, S16_LE, 16kHz, mono)
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "arecord",
+        "-D", AUDIO_DEV_IN,
+        "-f", "S16_LE",
+        "-r", str(AUDIO_RATE),
+        "-c", str(AUDIO_CH),
+        "-t", "raw",
+        "-q",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        while True:
+            pcm = await proc.stdout.readexactly(AUDIO_BYTES_PER_FRAME)
+            await ws.send(b"\x02" + pcm)
+    except asyncio.IncompleteReadError:
+        print("[AUDIO] arecord ended")
+    except Exception as e:
+        print(f"[AUDIO] error: {e}")
+    finally:
+        if proc.returncode is None:
+            proc.terminate()
+
+
 last_heartbeat = time.monotonic()
 async def receive_commands(ws):
     try:
         while True:
             msg = await ws.recv()
+
+            # Binary dari server (mis. video/audio) diabaikan oleh Pi pada mode ini
+            if isinstance(msg, (bytes, bytearray)):
+                continue
+
             if msg == "1":
                 global last_heartbeat
                 elapsed = time.monotonic() - last_heartbeat
@@ -94,6 +140,7 @@ async def receive_commands(ws):
                 except ValueError:
                     print("Invalid exposure value")
                 continue
+
             if msg.startswith("gain"):
                 try:
                     value = float(msg[len("gain"):])/1000.0
@@ -104,6 +151,7 @@ async def receive_commands(ws):
                 except ValueError:
                     print("Invalid gain value")
                 continue
+
             if msg.startswith("light"):
                 try:
                     value = int(msg[len("light"):])
@@ -113,6 +161,7 @@ async def receive_commands(ws):
                 except (ValueError, KeyError) as e:
                     print(f"Invalid light command: {e}")
                 continue
+
             try:
                 data = json.loads(msg)
                 print(data)
@@ -126,6 +175,7 @@ async def receive_commands(ws):
         print(f"Websocket closed: {e}")
         # Stop all motors on disconnect
         set_lines(lines, 0)
+
 
 async def heartbeat_watcher():
     global last_heartbeat
@@ -145,10 +195,11 @@ async def run_client():
 
                 consumer_task = asyncio.create_task(receive_commands(ws))
                 producer_task = asyncio.create_task(send_frames(ws))
+                audio_task = asyncio.create_task(send_audio(ws))
                 heartbeat_task = asyncio.create_task(heartbeat_watcher())
-                
+
                 done, pending = await asyncio.wait(
-                    [consumer_task, producer_task, heartbeat_task],
+                    [consumer_task, producer_task, audio_task, heartbeat_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for task in pending:
@@ -160,12 +211,14 @@ async def run_client():
             set_lines(lines, 0)
             await asyncio.sleep(3)  # retry delay
 
+
 def cleanup():
     print("Cleaning up GPIO...")
     set_lines(lines, 0)
     for line in lines:
         line.release()
     chip.close()
+
 
 if __name__ == "__main__":
     try:

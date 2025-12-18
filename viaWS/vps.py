@@ -19,6 +19,8 @@ async def handle_pi(websocket): #PI CONNECTED
     try:
         async for message in websocket:
             # Teruskan apa adanya ke semua client
+            if isinstance(message, (bytes, bytearray)) and len(message) > 0:
+                print(f"[PI->VPS] binary tag=0x{message[0]:02x}, size={len(message)}")
             await broadcast_to_clients(message)
     finally:
         print("Pi disconnected")
