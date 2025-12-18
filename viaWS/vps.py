@@ -44,25 +44,6 @@ async def handle_client(websocket, first_msg=None): #WEB CONNECTED
         print("Client disconnected")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async def handler(websocket):
     try:
         # Identifikasi awal: Pi akan kirim "pi", browser biasanya tidak kirim apa-apa
