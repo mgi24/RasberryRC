@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RC Control</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #07090f;
+            --bg2: #0d1117;
+            --surface: rgba(255, 255, 255, 0.04);
+            --surface2: rgba(255, 255, 255, 0.07);
+            --border: rgba(255, 255, 255, 0.08);
+            --border2: rgba(255, 255, 255, 0.14);
+            --accent: #3b82f6;
+            --accent-dim: rgba(59, 130, 246, 0.18);
+            --accent-glow: rgba(59, 130, 246, 0.45);
+            --text: #e2e8f0;
+            --text-muted: #64748b;
+            --text-dim: #94a3b8;
+            --green: #22c55e;
+            --green-glow: rgba(34, 197, 94, 0.35);
+            --red: #ef4444;
+            --orange: #f59e0b;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            padding: 20px;
+            overflow-x: auto;
+            background-image:
+                radial-gradient(ellipse at 20% 50%, rgba(59, 130, 246, 0.04) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.04) 0%, transparent 60%);
+        }
+
+        /* ── Main Layout ── */
+        .main-layout {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+            margin-top: 20px;
+            min-width: min-content;
+        }
+
+        /* ── Toggle Switch ── */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 22px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background-color: var(--border);
+            transition: .3s;
+            border-radius: 22px;
+        }
+
+        .slider::before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #fff;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--accent);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        input:checked + .slider::before {
+            transform: translateX(22px);
+        }
+
+        /* ── Video Panel (Left) ── */
+        .video-panel {
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .video-container {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #000;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* width/height set by JS */
+            width: 640px;
+            height: 360px;
+        }
+
+        /* ── Resize Handles ── */
+        .rh {
+            position: absolute;
+            z-index: 20;
+            opacity: 0;
+            transition: opacity 0.18s, background 0.18s;
+        }
+        .video-container:hover .rh { opacity: 1; }
+
+        /* Edge handles */
+        .rh-n  { top: 0;    left: 8px;    right: 8px;  height: 8px;  cursor: n-resize; }
+        .rh-s  { bottom: 0; left: 8px;    right: 8px;  height: 8px;  cursor: s-resize; }
+        .rh-e  { right: 0;  top: 8px;     bottom: 8px; width: 8px;   cursor: e-resize; }
+        .rh-w  { left: 0;   top: 8px;     bottom: 8px; width: 8px;   cursor: w-resize; }
+
+        /* Corner handles */
+        .rh-ne { top: 0;    right: 0; width: 14px; height: 14px; cursor: ne-resize; border-radius: 0 16px 0 0; }
+        .rh-nw { top: 0;    left: 0;  width: 14px; height: 14px; cursor: nw-resize; border-radius: 16px 0 0 0; }
+        .rh-se { bottom: 0; right: 0; width: 14px; height: 14px; cursor: se-resize; border-radius: 0 0 16px 0; }
+        .rh-sw { bottom: 0; left: 0;  width: 14px; height: 14px; cursor: sw-resize; border-radius: 0 0 0 16px; }
+
+        .rh:hover, .rh:active {
+            background: rgba(59, 130, 246, 0.35);
+            opacity: 1;
+        }
+
+        #cameraCanvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+
+        #cameraPlaceholder {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px 28px;
+            width: 400px;
+            min-width: 360px;
+            flex-shrink: 0;
+            backdrop-filter: blur(24px);
+            box-shadow:
+                0 32px 64px rgba(0, 0, 0, 0.6),
+                0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .title {
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #f1f5f9 0%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .title span {
+            font-weight: 300;
+            opacity: 0.7;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 12px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            transition: all 0.3s;
+        }
+
+        .status-badge.connected {
+            border-color: rgba(34, 197, 94, 0.3);
+            color: var(--green);
+        }
+
+        .status-badge.connecting {
+            border-color: rgba(245, 158, 11, 0.3);
+            color: var(--orange);
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: all 0.3s;
+            flex-shrink: 0;
+        }
+
+        .status-badge.connected .status-dot {
+            background: var(--green);
+            box-shadow: 0 0 8px var(--green-glow);
+            animation: pulse 2s infinite;
+        }
+
+        .status-badge.connecting .status-dot {
+            background: var(--orange);
+            animation: pulse 0.7s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.3;
+            }
+        }
+
+        /* ── WS Row ── */
+        .ws-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 28px;
+        }
+
+        .ws-input {
+            flex: 1;
+            min-width: 0;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: var(--text);
+            font-family: 'Inter', monospace;
+            font-size: 0.82rem;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .ws-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+        }
+
+        .connect-btn {
+            padding: 10px 18px;
+            background: var(--accent);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .connect-btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(59, 130, 246, 0.4);
+        }
+
+        .connect-btn:active {
+            transform: translateY(0);
+        }
+
+        .connect-btn.disco {
+            background: var(--red);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        .connect-btn.disco:hover {
+            background: #dc2626;
+            box-shadow: 0 6px 18px rgba(239, 68, 68, 0.4);
+        }
+
+        /* ── D-Pad ── */
+        .dpad-wrap {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 24px;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 80px);
+            grid-template-rows: repeat(3, 80px);
+            gap: 8px;
+        }
+
+        .dpad-btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: all 0.12s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dpad-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .dpad-btn:hover {
+            background: var(--surface2);
+            border-color: var(--border2);
+        }
+
+        .dpad-btn:hover::before {
+            opacity: 1;
+        }
+
+        .dpad-btn.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            box-shadow: 0 0 24px var(--accent-glow), inset 0 0 16px rgba(59, 130, 246, 0.08);
+            transform: scale(0.94);
+        }
+
+        .dpad-btn.active::before {
+            opacity: 1;
+        }
+
+        .dpad-btn .arrow {
+            font-size: 1.5rem;
+            line-height: 1;
+            transition: transform 0.12s;
+        }
+
+        .dpad-btn.active .arrow {
+            transform: scale(1.15);
+        }
+
+        .dpad-btn .key-hint {
+            font-size: 0.62rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            transition: color 0.12s;
+        }
+
+        .dpad-btn.active .key-hint {
+            color: #93c5fd;
+        }
+
+        .dpad-btn .dir-label {
+            font-size: 0.68rem;
+            font-weight: 500;
+            color: var(--text-dim);
+            transition: color 0.12s;
+        }
+
+        .dpad-btn.active .dir-label {
+            color: var(--text);
+        }
+
+        .dpad-empty {
+            pointer-events: none;
+            background: transparent !important;
+            border-color: transparent !important;
+            box-shadow: none !important;
+        }
+
+        /* ── Active Keys indicator ── */
+        .active-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 32px;
+            margin-bottom: 20px;
+        }
+
+        .key-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: var(--accent-dim);
+            border: 1px solid var(--accent);
+            border-radius: 7px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #93c5fd;
+            letter-spacing: 0.05em;
+            animation: keyPop 0.12s ease;
+        }
+
+        @keyframes keyPop {
+            from {
+                transform: scale(0.7);
+                opacity: 0.5;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .no-keys {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* ── Footer info ── */
+        .footer-info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+        }
+
+        .dot {
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.4;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 800px) {
+            .main-layout {
+                flex-direction: column;
+            }
+            .card {
+                width: 100%;
+                min-width: unset;
+            }
+            .video-container {
+                width: 100% !important;
+                height: auto !important;
+                aspect-ratio: 16/9;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="main-layout">
+
+        <!-- Video Panel (Left) -->
+        <div class="video-panel">
+            <div class="video-container" id="videoContainer">
+                <!-- Resize handles -->
+                <div class="rh rh-n"  data-dir="n"></div>
+                <div class="rh rh-s"  data-dir="s"></div>
+                <div class="rh rh-e"  data-dir="e"></div>
+                <div class="rh rh-w"  data-dir="w"></div>
+                <div class="rh rh-ne" data-dir="ne"></div>
+                <div class="rh rh-nw" data-dir="nw"></div>
+                <div class="rh rh-se" data-dir="se"></div>
+                <div class="rh rh-sw" data-dir="sw"></div>
+
+                <canvas id="cameraCanvas" width="640" height="360"></canvas>
+                <div id="cameraPlaceholder">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.66 6H14a2 2 0 0 1 2 2v3.34" />
+                        <path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2" />
+                        <path d="m2 2 20 20" />
+                        <path d="m21 16-3.76-2.51a1 1 0 0 1-.24-1.2l1.24-2.48a1 1 0 0 1 .46-.46L21 8Z" />
+                    </svg>
+                    <span>Camera Offline</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls Card (Right) -->
+        <div class="card">
+
+            <!-- Header -->
+            <div class="header">
+                <div class="title">RC <span>Control</span></div>
+                <div class="status-badge" id="statusBadge">
+                    <div class="status-dot"></div>
+                    <span id="statusText">Disconnected</span>
+                </div>
+            </div>
+
+            <!-- WS URL + Connect -->
+            <div class="ws-row">
+                <input class="ws-input" type="text" id="wsUrl" value="ws://192.168.0.104:8766"
+                    placeholder="ws://host:port">
+                <button class="connect-btn" id="connectBtn">Connect</button>
+            </div>
+
+            <!-- D-Pad -->
+            <div class="dpad-wrap">
+                <div class="dpad">
+                    <div class="dpad-btn dpad-empty"></div>
+
+                    <button class="dpad-btn" id="btn-forward" data-dir="forward">
+                        <span class="arrow">▲</span>
+                        <span class="dir-label">Forward</span>
+                        <span class="key-hint">W</span>
+                    </button>
+
+                    <div class="dpad-btn dpad-empty"></div>
+
+                    <button class="dpad-btn" id="btn-left" data-dir="left">
+                        <span class="arrow">◄</span>
+                        <span class="dir-label">Left</span>
+                        <span class="key-hint">A</span>
+                    </button>
+
+                    <div class="dpad-btn dpad-empty"></div>
+
+                    <button class="dpad-btn" id="btn-right" data-dir="right">
+                        <span class="arrow">►</span>
+                        <span class="dir-label">Right</span>
+                        <span class="key-hint">D</span>
+                    </button>
+
+                    <div class="dpad-btn dpad-empty"></div>
+
+                    <button class="dpad-btn" id="btn-backward" data-dir="backward">
+                        <span class="arrow">▼</span>
+                        <span class="dir-label">Reverse</span>
+                        <span class="key-hint">S</span>
+                    </button>
+
+                    <div class="dpad-btn dpad-empty"></div>
+                </div>
+            </div>
+
+            <!-- Active Key chips -->
+            <div class="active-row" id="activeRow">
+                <span class="no-keys">No keys pressed</span>
+            </div>
+
+            <!-- Speed Slider -->
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:24px; padding:0 10px;">
+                <span style="font-size:0.85rem; font-weight:600; color:var(--text-muted);">SPEED</span>
+                <input type="range" id="speedSlider" min="0" max="100" value="100" style="flex:1;">
+                <span id="speedValue"
+                    style="font-size:0.85rem; font-weight:700; color:var(--accent); min-width:3ch; text-align:right;">100</span>
+            </div>
+
+            <!-- Mode Selector -->
+            <div
+                style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; padding:0 10px;">
+                <span style="font-size:0.85rem; font-weight:600; color:var(--text-muted); width: 50px;">MODE</span>
+                <select id="modeSelect"
+                    style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 8px 12px; font-size: 0.85rem; outline: none; flex: 1; transition: border-color 0.2s;">
+                    <option value="0" style="background: var(--bg2);">FWD</option>
+                    <option value="1" style="background: var(--bg2);">RWD</option>
+                    <option value="2" style="background: var(--bg2);" selected>AWD</option>
+                </select>
+                <button id="saveModeBtn" class="connect-btn"
+                    style="padding: 8px 16px; font-size: 0.85rem;">Save</button>
+            </div>
+
+            <!-- Mode Status -->
+            <div id="modeStatus"
+                style="font-size:0.75rem; text-align:center; min-height: 18px; margin-bottom:24px; transition: color 0.3s; font-weight:600; height: 18px;">
+            </div>
+
+            <!-- Front Lamp Controls -->
+            <div style="border-top: 1px solid var(--border); padding-top: 20px; margin-bottom: 24px;">
+                <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
+                    Front Lamp</div>
+
+                <!-- Front Lamp Toggle Checkbox -->
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:0 10px; margin-bottom: 16px;">
+                    <span style="font-size:0.82rem; font-weight:600; color:var(--text-muted);">ON / OFF</span>
+                    <label class="switch">
+                        <input type="checkbox" id="frontLampToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Camera Controls -->
+            <div style="border-top: 1px solid var(--border); padding-top: 20px; margin-top: 12px; margin-bottom: 24px;">
+                <div
+                    style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">
+                    Camera Settings</div>
+
+                <!-- Exposure Slider -->
+                <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; padding:0 10px;">
+                    <span
+                        style="font-size:0.82rem; font-weight:600; color:var(--text-muted); width: 80px;">EXPOSURE</span>
+                    <input type="range" id="exposureSlider" min="100" max="100000" value="10000" style="flex:1;">
+                    <span id="exposureValue"
+                        style="font-size:0.82rem; font-weight:700; color:var(--accent); min-width:6ch; text-align:right;">10000</span>
+                </div>
+
+                <!-- Gain Slider -->
+                <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; padding:0 10px;">
+                    <span style="font-size:0.82rem; font-weight:600; color:var(--text-muted); width: 80px;">GAIN</span>
+                    <input type="range" id="gainSlider" min="0" max="100000" value="1000" style="flex:1;">
+                    <span id="gainValue"
+                        style="font-size:0.82rem; font-weight:700; color:var(--accent); min-width:6ch; text-align:right;">1000</span>
+                </div>
+
+                <!-- Record Controls -->
+                <div style="display:flex; gap:12px; padding:0 10px;">
+                    <button id="startRecBtn" class="connect-btn"
+                        style="flex:1; background: var(--green); box-shadow: 0 4px 12px var(--green-glow);">Start
+                        Record</button>
+                    <button id="stopRecBtn" class="connect-btn disco"
+                        style="flex:1; background: var(--red); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);">Stop
+                        Record</button>
+                </div>
+
+                <!-- Record Status -->
+                <div id="recordStatus"
+                    style="font-size:0.75rem; text-align:center; min-height: 18px; margin-top:12px; color: var(--text-muted); font-weight:600; height: 18px;">
+                    Not Recording</div>
+
+                <!-- Audio Toggle Checkbox -->
+                <div style="border-top: 1px solid var(--border); padding-top: 16px; margin-top: 12px; display:flex; align-items:center; justify-content:space-between; padding:0 10px;">
+                    <span style="font-size:0.82rem; font-weight:600; color:var(--text-muted);">STREAM AUDIO</span>
+                    <label class="switch">
+                        <input type="checkbox" id="audioToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <!-- Audio Boost Slider -->
+                <div style="display:flex; align-items:center; gap:12px; margin-top:12px; padding:0 10px;">
+                    <span style="font-size:0.82rem; font-weight:600; color:var(--text-muted); width: 80px;">AUDIO BOOST</span>
+                    <input type="range" id="audioBoostSlider" min="1" max="15" value="1" step="0.5" style="flex:1;">
+                    <span id="audioBoostValue" style="font-size:0.82rem; font-weight:700; color:var(--accent); min-width:4ch; text-align:right;">1.0x</span>
+                </div>
+
+                <!-- Audio Status -->
+                <div id="audioStatus"
+                    style="font-size:0.75rem; text-align:center; min-height: 18px; margin-top:12px; color: var(--text-muted); font-weight:600; height: 18px; transition: color 0.3s;">
+                    Audio Stream Disabled</div>
+            </div>
+
+            <!-- Footer -->
+            <div class="footer-info">
+                <span>WASD / Touch</span>
+                <div class="dot"></div>
+                <span>Anti dual-input</span>
+                <div class="dot"></div>
+                <span>50 ms heartbeat</span>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        //  WebSocket
+        // ============================================================
+        const wsUrlInput = document.getElementById('wsUrl');
+        const connectBtn = document.getElementById('connectBtn');
+        const statusBadge = document.getElementById('statusBadge');
+        const statusText = document.getElementById('statusText');
+        const activeRow = document.getElementById('activeRow');
+        const modeSelect = document.getElementById('modeSelect');
+        const saveModeBtn = document.getElementById('saveModeBtn');
+        const modeStatus = document.getElementById('modeStatus');
+
+        // Lamp elements
+        const frontLampToggle = document.getElementById('frontLampToggle');
+
+        // Camera elements
+        const cameraCanvas = document.getElementById('cameraCanvas');
+        const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+        const exposureSlider = document.getElementById('exposureSlider');
+        const exposureValue = document.getElementById('exposureValue');
+        const gainSlider = document.getElementById('gainSlider');
+        const gainValue = document.getElementById('gainValue');
+        const startRecBtn = document.getElementById('startRecBtn');
+        const stopRecBtn = document.getElementById('stopRecBtn');
+        const recordStatus = document.getElementById('recordStatus');
+
+        // Audio elements & state
+        const audioToggle = document.getElementById('audioToggle');
+        const audioStatus = document.getElementById('audioStatus');
+        const audioBoostSlider = document.getElementById('audioBoostSlider');
+        const audioBoostValue = document.getElementById('audioBoostValue');
+        
+        const AUDIO_RATE = 16000;
+        let audioCtx = null;
+        let scriptNode = null;
+        let audioBuf = new Float32Array(0);
+        let volumeBoost = 1.0;
+
+        let ws = null;
+        let isRecording = false;
+
+        function updateRecordUI() {
+            if (isRecording) {
+                startRecBtn.style.opacity = '0.5';
+                startRecBtn.style.pointerEvents = 'none';
+                stopRecBtn.style.opacity = '1';
+                stopRecBtn.style.pointerEvents = 'auto';
+                recordStatus.textContent = 'RECORDING VIDEO...';
+                recordStatus.style.color = 'var(--red)';
+            } else {
+                startRecBtn.style.opacity = '1';
+                startRecBtn.style.pointerEvents = 'auto';
+                stopRecBtn.style.opacity = '0.5';
+                stopRecBtn.style.pointerEvents = 'none';
+                recordStatus.textContent = 'Not Recording';
+                recordStatus.style.color = 'var(--text-muted)';
+            }
+        }
+
+        function resetCameraUI() {
+            cameraCanvas.style.display = 'none';
+            cameraPlaceholder.style.display = 'flex';
+            isRecording = false;
+            updateRecordUI();
+            
+            // Audio reset
+            stopAudioPlayback();
+            audioToggle.checked = false;
+            audioStatus.textContent = "Audio Stream Disabled";
+            audioStatus.style.color = "var(--text-muted)";
+            audioBuf = new Float32Array(0);
+        }
+
+        // Initialize UI states
+        updateRecordUI();
+
+        function setStatus(state) {
+            statusBadge.className = 'status-badge ' + (state || '');
+            if (state === 'connected') {
+                statusText.textContent = 'Connected';
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.className = 'connect-btn disco';
+            } else if (state === 'connecting') {
+                statusText.textContent = 'Connecting…';
+                connectBtn.textContent = 'Cancel';
+                connectBtn.className = 'connect-btn disco';
+            } else {
+                statusText.textContent = 'Disconnected';
+                connectBtn.textContent = 'Connect';
+                connectBtn.className = 'connect-btn';
+            }
+        }
+
+        let modeStatusTimeout = null;
+        function showModeStatus(text, type) {
+            modeStatus.textContent = text;
+            if (type === 'green') {
+                modeStatus.style.color = 'var(--green)';
+            } else if (type === 'red') {
+                modeStatus.style.color = 'var(--red)';
+            } else {
+                modeStatus.style.color = 'var(--text-dim)';
+            }
+            clearTimeout(modeStatusTimeout);
+            modeStatusTimeout = setTimeout(() => {
+                modeStatus.textContent = '';
+            }, 2000);
+        }
+
+        function connect() {
+            if (ws && ws.readyState <= WebSocket.OPEN) { ws.close(); return; }
+            const url = wsUrlInput.value.trim();
+            if (!url) return;
+            setStatus('connecting');
+            ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = () => {
+                setStatus('connected');
+                ws.send('client');
+
+                // Send initial settings
+                ws.send(`exposure${exposureSlider.value}`);
+                ws.send(`gain${gainSlider.value}`);
+            };
+            ws.onclose = () => { setStatus(''); stopAllMotors(); resetCameraUI(); };
+            ws.onerror = () => { setStatus(''); stopAllMotors(); resetCameraUI(); };
+            ws.onmessage = (event) => {
+                if (typeof event.data === 'string') {
+                    const msg = event.data.trim();
+                    if (msg === 'record1') {
+                        isRecording = true;
+                        updateRecordUI();
+                        return;
+                    }
+                    if (msg === 'record2') {
+                        isRecording = false;
+                        updateRecordUI();
+                        return;
+                    }
+                    try {
+                        const data = JSON.parse(msg);
+                        if (data.mode_confirm === 'ok') {
+                            let modeName = "AWD";
+                            if (data.mode === 0) modeName = "FWD";
+                            else if (data.mode === 1) modeName = "RWD";
+                            showModeStatus(`SUCCESS: Mode set to ${modeName}`, 'green');
+                        } else if (data.mode_confirm === 'fail') {
+                            showModeStatus('FAILED: Could not set mode', 'red');
+                        } else if (data.audio_confirm === 'ok') {
+                            if (data.audio === 1) {
+                                audioToggle.checked = true;
+                                startAudioPlayback();
+                                showAudioStatus('SUCCESS: Audio started', 'green');
+                            } else {
+                                audioToggle.checked = false;
+                                stopAudioPlayback();
+                                showAudioStatus('SUCCESS: Audio stopped', 'green');
+                            }
+                        } else if (data.audio_confirm === 'fail') {
+                            audioToggle.checked = false;
+                            stopAudioPlayback();
+                            showAudioStatus(`FAILED: ${data.reason || 'Audio error'}`, 'red');
+                        }
+                    } catch (e) {
+                        // Ignore non-json messages
+                    }
+                } else if (event.data instanceof ArrayBuffer) {
+                    const arr = new Uint8Array(event.data);
+                    if (arr.length < 2) return;
+                    const tag = arr[0];
+                    if (tag === 0x01) {
+                        // Video MJPEG
+                        const blob = new Blob([arr.slice(1)], { type: 'image/jpeg' });
+                        const img = new Image();
+                        img.onload = () => {
+                            cameraCanvas.style.display = 'block';
+                            cameraPlaceholder.style.display = 'none';
+                            const ctx = cameraCanvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, cameraCanvas.width, cameraCanvas.height);
+                            URL.revokeObjectURL(img.src);
+                        };
+                        img.src = URL.createObjectURL(blob);
+                    } else if (tag === 0x02) {
+                        // Audio PCM
+                        const pcmU8 = arr.slice(1);
+                        const f32_48k = pcmS16leToFloat32(pcmU8);
+                        const outRate = audioCtx ? audioCtx.sampleRate : AUDIO_RATE;
+                        const f32_out = resampleLinear(f32_48k, AUDIO_RATE, outRate);
+                        pushAudio(f32_out);
+                    }
+                }
+            };
+        }
+
+        connectBtn.addEventListener('click', connect);
+
+        saveModeBtn.addEventListener('click', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                showModeStatus('FAILED: Not Connected', 'red');
+                return;
+            }
+            const modeVal = parseInt(modeSelect.value, 10);
+            ws.send(JSON.stringify({ set_mode: modeVal }));
+        });
+
+        // Lamp event listeners
+        function sendLampState() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (frontLampToggle.checked) {
+                ws.send(`light1,1`);
+            } else {
+                ws.send(`light1,0`);
+            }
+        }
+
+        frontLampToggle.addEventListener('change', sendLampState);
+
+        // Camera event listeners
+        exposureSlider.addEventListener('input', () => {
+            exposureValue.textContent = exposureSlider.value;
+        });
+        exposureSlider.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(`exposure${exposureSlider.value}`);
+            }
+        });
+
+        gainSlider.addEventListener('input', () => {
+            gainValue.textContent = gainSlider.value;
+        });
+        gainSlider.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(`gain${gainSlider.value}`);
+            }
+        });
+
+        startRecBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('record1');
+            }
+        });
+
+        stopRecBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('record2');
+            }
+        });
+
+        // Audio Stream Event Listener and Processing
+        let audioStatusTimeout = null;
+        function showAudioStatus(text, type) {
+            audioStatus.textContent = text;
+            if (type === 'green') {
+                audioStatus.style.color = 'var(--green)';
+            } else if (type === 'red') {
+                audioStatus.style.color = 'var(--red)';
+            } else {
+                audioStatus.style.color = 'var(--text-muted)';
+            }
+            clearTimeout(audioStatusTimeout);
+            audioStatusTimeout = setTimeout(() => {
+                if (audioToggle.checked) {
+                    audioStatus.textContent = "Audio Stream Active";
+                    audioStatus.style.color = "var(--green)";
+                } else {
+                    audioStatus.textContent = "Audio Stream Disabled";
+                    audioStatus.style.color = "var(--text-muted)";
+                }
+            }, 2000);
+        }
+
+        audioToggle.addEventListener('change', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                audioToggle.checked = !audioToggle.checked; // revert
+                showAudioStatus('FAILED: Not Connected', 'red');
+                return;
+            }
+            const active = audioToggle.checked ? 1 : 0;
+            ws.send(JSON.stringify({ set_audio: active }));
+        });
+
+        audioBoostSlider.addEventListener('input', () => {
+            volumeBoost = parseFloat(audioBoostSlider.value);
+            audioBoostValue.textContent = volumeBoost.toFixed(1) + 'x';
+        });
+
+        function pcmS16leToFloat32(u8) {
+            const n = (u8.length / 2) | 0;
+            const out = new Float32Array(n);
+            for (let i = 0, j = 0; i < n; i++, j += 2) {
+                const lo = u8[j];
+                const hi = u8[j + 1];
+                let v = (hi << 8) | lo;
+                if (v & 0x8000) v -= 0x10000;
+                out[i] = v / 32768;
+            }
+            return out;
+        }
+
+        function pushAudio(chunkF32) {
+            const merged = new Float32Array(audioBuf.length + chunkF32.length);
+            merged.set(audioBuf, 0);
+            merged.set(chunkF32, audioBuf.length);
+            audioBuf = merged;
+
+            const max = AUDIO_RATE * 1;
+            if (audioBuf.length > max) {
+                audioBuf = audioBuf.slice(audioBuf.length - max);
+            }
+        }
+
+        function resampleLinear(input, inRate, outRate) {
+            if (inRate === outRate) return input;
+            const ratio = outRate / inRate;
+            const outLen = Math.max(1, Math.floor(input.length * ratio));
+            const out = new Float32Array(outLen);
+
+            for (let i = 0; i < outLen; i++) {
+                const x = i / ratio;
+                const x0 = Math.floor(x);
+                const x1 = Math.min(input.length - 1, x0 + 1);
+                const t = x - x0;
+                out[i] = (1 - t) * input[x0] + t * input[x1];
+            }
+            return out;
+        }
+
+        async function startAudioPlayback() {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    console.log("[AUDIO] ctx sampleRate =", audioCtx.sampleRate);
+
+                    const bufferSize = 1024;
+                    scriptNode = audioCtx.createScriptProcessor(bufferSize, 0, 1);
+
+                    scriptNode.onaudioprocess = (e) => {
+                        const out = e.outputBuffer.getChannelData(0);
+                        const n = out.length;
+
+                        if (audioBuf.length < n) {
+                            out.fill(0);
+                            return;
+                        }
+                        const sub = audioBuf.subarray(0, n);
+                        for (let i = 0; i < n; i++) {
+                            out[i] = sub[i] * volumeBoost;
+                        }
+                        audioBuf = audioBuf.subarray(n);
+                    };
+
+                    scriptNode.connect(audioCtx.destination);
+                }
+
+                if (audioCtx.state !== "running") {
+                    await audioCtx.resume();
+                }
+            } catch (e) {
+                console.error("[AUDIO] start audio playback failed:", e);
+            }
+        }
+
+        async function stopAudioPlayback() {
+            try {
+                if (audioCtx && audioCtx.state === "running") {
+                    await audioCtx.suspend();
+                }
+            } catch (e) {
+                console.error("[AUDIO] stop audio playback failed:", e);
+            }
+        }
+
+        // ============================================================
+        //  Motor State & Anti Dual-Input
+        // ============================================================
+        const pressed = { forward: false, backward: false, left: false, right: false };
+        const pins = { forward: 0, backward: 0, left: 0, right: 0, speed: 100 };
+        let lastFB = null;  // tiebreak: forward vs backward
+        let lastLR = null;  // tiebreak: left vs right
+
+        // Speed Slider
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
+        speedSlider.addEventListener('input', () => {
+            speedValue.textContent = speedSlider.value;
+            pins.speed = parseInt(speedSlider.value, 10);
+            sendPins();
+        });
+
+        let spamInterval = null;
+        const SPAM_MS = 50;
+
+        function sendPins() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify(pins));
+        }
+
+        function startSpam() {
+            if (spamInterval) return;
+            spamInterval = setInterval(sendPins, SPAM_MS);
+        }
+
+        function stopSpam() {
+            if (!spamInterval) return;
+            clearInterval(spamInterval);
+            spamInterval = null;
+        }
+
+        function stopAllMotors() {
+            pressed.forward = pressed.backward = pressed.left = pressed.right = false;
+            updateMotion();
+        }
+
+        function updateMotion() {
+            // ── Anti dual-input: forward / backward ──
+            if (pressed.forward && pressed.backward) {
+                pins.forward = lastFB === 'forward' ? 1 : 0;
+                pins.backward = lastFB === 'backward' ? 1 : 0;
+            } else {
+                pins.forward = pressed.forward ? 1 : 0;
+                pins.backward = pressed.backward ? 1 : 0;
+            }
+
+            // ── Anti dual-input: left / right ──
+            if (pressed.left && pressed.right) {
+                pins.left = lastLR === 'left' ? 1 : 0;
+                pins.right = lastLR === 'right' ? 1 : 0;
+            } else {
+                pins.left = pressed.left ? 1 : 0;
+                pins.right = pressed.right ? 1 : 0;
+            }
+
+            const anyActive = pins.forward || pins.backward || pins.left || pins.right;
+
+            if (anyActive) {
+                startSpam();
+            } else {
+                stopSpam();
+                sendPins(); // kirim state zero sekali
+            }
+
+            refreshUI();
+        }
+
+        function refreshUI() {
+            ['forward', 'backward', 'left', 'right'].forEach(dir => {
+                const btn = document.getElementById('btn-' + dir);
+                if (!btn) return;
+                if (pins[dir]) btn.classList.add('active');
+                else btn.classList.remove('active');
+            });
+
+            const active = [];
+            if (pins.forward) active.push('W');
+            if (pins.backward) active.push('S');
+            if (pins.left) active.push('A');
+            if (pins.right) active.push('D');
+
+            if (active.length === 0) {
+                activeRow.innerHTML = '<span class="no-keys">No keys pressed</span>';
+            } else {
+                activeRow.innerHTML = active
+                    .map(k => `<span class="key-chip">${k}</span>`)
+                    .join('');
+            }
+        }
+
+        // ============================================================
+        //  Keyboard
+        // ============================================================
+        const keyMap = { w: 'forward', a: 'left', s: 'backward', d: 'right' };
+
+        document.addEventListener('keydown', e => {
+            if (e.target.tagName === 'INPUT') return;
+            const dir = keyMap[e.key.toLowerCase()];
+            if (!dir || pressed[dir]) return;
+            pressed[dir] = true;
+            if (dir === 'forward' || dir === 'backward') lastFB = dir;
+            if (dir === 'left' || dir === 'right') lastLR = dir;
+            updateMotion();
+        });
+
+        document.addEventListener('keyup', e => {
+            const dir = keyMap[e.key.toLowerCase()];
+            if (!dir) return;
+            pressed[dir] = false;
+            updateMotion();
+        });
+
+        window.addEventListener('blur', stopAllMotors);
+
+        // ============================================================
+        //  Touch / Mouse buttons
+        // ============================================================
+        ['forward', 'backward', 'left', 'right'].forEach(dir => {
+            const btn = document.getElementById('btn-' + dir);
+            if (!btn) return;
+
+            function press() {
+                pressed[dir] = true;
+                if (dir === 'forward' || dir === 'backward') lastFB = dir;
+                if (dir === 'left' || dir === 'right') lastLR = dir;
+                updateMotion();
+            }
+            function release() {
+                pressed[dir] = false;
+                updateMotion();
+            }
+
+            btn.addEventListener('mousedown', press);
+            btn.addEventListener('mouseup', release);
+            btn.addEventListener('mouseleave', release);
+            btn.addEventListener('touchstart', e => { e.preventDefault(); press(); }, { passive: false });
+            btn.addEventListener('touchend', e => { e.preventDefault(); release(); }, { passive: false });
+            btn.addEventListener('touchcancel', e => { e.preventDefault(); release(); }, { passive: false });
+        });
+
+        // ============================================================
+        //  Video Resize — all 4 sides + 4 corners, locked 16:9
+        // ============================================================
+        (function () {
+            const RATIO = 16 / 9;
+            const MIN_W = 240;
+            const vc = document.getElementById('videoContainer');
+            const vp = document.querySelector('.video-panel');
+
+            // Start dimensions
+            let W = 640, H = 360;
+            applySize(W, H);
+
+            function applySize(w, h) {
+                W = Math.max(MIN_W, Math.round(w));
+                H = Math.round(W / RATIO);
+                vc.style.width  = W + 'px';
+                vc.style.height = H + 'px';
+            }
+
+            let dragging = false;
+            let dir = '';
+            let startX, startY, startW, startH;
+            // For N/W/NW/NE/SW handles we also need to track panel offset
+            let startMLeft, startMTop;
+
+            document.querySelectorAll('.rh').forEach(handle => {
+                handle.addEventListener('mousedown', onDown);
+                handle.addEventListener('touchstart', onTouchDown, { passive: false });
+            });
+
+            function onDown(e) {
+                e.preventDefault();
+                dir = e.currentTarget.dataset.dir;
+                startX = e.clientX;
+                startY = e.clientY;
+                startW = vc.offsetWidth;
+                startH = vc.offsetHeight;
+                startMLeft = parseFloat(vp.style.marginLeft) || 0;
+                startMTop  = parseFloat(vp.style.marginTop)  || 0;
+                dragging = true;
+                document.body.style.cursor = getComputedStyle(e.currentTarget).cursor;
+                document.body.style.userSelect = 'none';
+            }
+
+            function onTouchDown(e) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                onDown({ preventDefault: () => {}, clientX: touch.clientX, clientY: touch.clientY,
+                          currentTarget: e.currentTarget });
+            }
+
+            function onMove(e) {
+                if (!dragging) return;
+                const cx = e.clientX ?? e.touches[0].clientX;
+                const cy = e.clientY ?? e.touches[0].clientY;
+                const dx = cx - startX;
+                const dy = cy - startY;
+
+                let newW = startW;
+
+                // Determine dominant delta per direction, then lock 16:9
+                if (dir === 'e' || dir === 'ne' || dir === 'se') {
+                    // Right edge → width driven
+                    newW = startW + dx;
+                } else if (dir === 'w' || dir === 'nw' || dir === 'sw') {
+                    // Left edge → width driven (inverted), shift panel left
+                    newW = startW - dx;
+                } else if (dir === 'n') {
+                    // Top edge → height driven
+                    const newH = startH - dy;
+                    newW = newH * RATIO;
+                } else if (dir === 's') {
+                    // Bottom edge → height driven
+                    const newH = startH + dy;
+                    newW = newH * RATIO;
+                }
+
+                newW = Math.max(MIN_W, newW);
+                const newH = newW / RATIO;
+
+                // Shift panel position for handles that pull the left/top edge
+                if (dir === 'w' || dir === 'nw' || dir === 'sw') {
+                    vp.style.marginLeft = (startMLeft + (startW - newW)) + 'px';
+                }
+                if (dir === 'n' || dir === 'nw' || dir === 'ne') {
+                    vp.style.marginTop = (startMTop + (startH - newH)) + 'px';
+                }
+
+                applySize(newW, newH);
+            }
+
+            function onUp() {
+                if (!dragging) return;
+                dragging = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+            document.addEventListener('touchmove', e => onMove(e), { passive: false });
+            document.addEventListener('touchend',  onUp);
+        })();
+    </script>
+</body>
+
+</html>

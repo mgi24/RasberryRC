@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>GPS Tracker</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    #map { height: 100vh; }
+
+    /* Panel info selalu terlihat */
+    .info-panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.35;
+      min-width: 220px;
+      box-shadow: 0 4px 18px rgba(0,0,0,.12);
+    }
+    .info-panel .title { font-weight: 700; margin-bottom: 6px; }
+    .info-panel .row { display: flex; justify-content: space-between; gap: 10px; }
+    .info-panel .key { color: #555; }
+    .info-panel .val { font-variant-numeric: tabular-nums; }
+    .info-panel .muted { color: #777; font-size: 12px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- Info selalu visible -->
+<div class="info-panel" id="info">
+  <div class="title">GPS Tracker</div>
+
+  <div class="row"><div class="key">Latitude</div><div class="val" id="latVal">—</div></div>
+  <div class="row"><div class="key">Longitude</div><div class="val" id="lngVal">—</div></div>
+  <div class="row"><div class="key">Satellites</div><div class="val" id="satVal">—</div></div>
+  <div class="row"><div class="key">HDOP</div><div class="val" id="hdopVal">—</div></div>
+
+  <div class="muted">Last update: <span id="lastVal">—</span></div>
+</div>
+
+<script>
+  // === ThingsBoard config (samakan dengan di gps.ino) ===
+  const tbserver = "big.2b2t.my.id";
+  const server_port = "80";
+  const deviceID = "c16b87e0-d70a-11f0-9c3b-4d39d5ff9af1";
+  const tbuser = "tenant@thingsboard.org";
+  const tbpass = "tenant";
+
+  // JWT Bearer token akan diambil via /api/auth/login
+  let bearerToken = "";
+  let tokenExpMs = 0;
+
+  const keys = "longitude,latitude,satellites,hdop";
+  const telemetryUrl = `http://${tbserver}:${server_port}/api/plugins/telemetry/DEVICE/${deviceID}/values/timeseries?keys=${encodeURIComponent(keys)}&useStrictDataTypes=true`;
+  const loginUrl = `http://${tbserver}:${server_port}/api/auth/login`;
+
+  // Default posisi awal (akan diganti setelah data masuk)
+  let lat = -6.175392;
+  let lng = 106.827153;
+
+  const map = L.map('map').setView([lat, lng], 16);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  const marker = L.marker([lat, lng]).addTo(map);
+
+  // Elemen UI info
+  const latEl = document.getElementById("latVal");
+  const lngEl = document.getElementById("lngVal");
+  const satEl = document.getElementById("satVal");
+  const hdopEl = document.getElementById("hdopVal");
+  const lastEl = document.getElementById("lastVal");
+
+  function base64UrlDecodeToJson(b64Url) {
+    // JWT pakai base64url: '-' '_' tanpa '=' padding
+    let b64 = b64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4;
+    if (pad) b64 += '='.repeat(4 - pad);
+    const json = atob(b64);
+    return JSON.parse(json);
+  }
+
+  function setTokenAndExp(jwt) {
+    bearerToken = jwt;
+    tokenExpMs = 0;
+    try {
+      const parts = jwt.split('.');
+      if (parts.length === 3) {
+        const payload = base64UrlDecodeToJson(parts[1]);
+        if (payload && typeof payload.exp === 'number') {
+          tokenExpMs = payload.exp * 1000;
+        }
+      }
+    } catch {
+      // kalau gagal decode, tetap pakai token tanpa info exp
+      tokenExpMs = 0;
+    }
+  }
+
+  async function loginAndGetToken() {
+    const res = await fetch(loginUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: tbuser, password: tbpass }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Login gagal: HTTP ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    if (!data || typeof data.token !== 'string' || data.token.length < 10) {
+      throw new Error('Login gagal: token tidak ditemukan di response');
+    }
+    setTokenAndExp(data.token);
+    return bearerToken;
+  }
+
+  async function ensureValidToken() {
+    // Refresh kalau token kosong atau hampir expired (10 detik buffer)
+    const now = Date.now();
+    const aboutToExpire = tokenExpMs > 0 && now >= (tokenExpMs - 10_000);
+    if (!bearerToken || aboutToExpire) {
+      await loginAndGetToken();
+    }
+    return bearerToken;
+  }
+
+  function parseLatest(arr) {
+    // ThingsBoard: array of { ts, value }
+    if (!Array.isArray(arr) || arr.length === 0) return { value: null, ts: null };
+    const last = arr[arr.length - 1];
+    const v = (last && last.value !== undefined && last.value !== null) ? Number(last.value) : null;
+    const value = Number.isFinite(v) ? v : null;
+    const ts = (last && typeof last.ts === "number") ? last.ts : null;
+    return { value, ts };
+  }
+
+  function maxTs(...tss) {
+    const nums = tss.filter((x) => typeof x === "number" && Number.isFinite(x));
+    return nums.length ? Math.max(...nums) : null;
+  }
+
+  function fmtTime(tsMs) {
+    if (typeof tsMs !== "number") return "—";
+    // tampilkan jam lokal user
+    return new Date(tsMs).toLocaleString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  }
+
+  async function fetchTelemetry() {
+    const jwt = await ensureValidToken();
+    const res = await fetch(telemetryUrl, { headers: { "Authorization": `Bearer ${jwt}` } });
+
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        bearerToken = "";
+        tokenExpMs = 0;
+        const jwt2 = await ensureValidToken();
+        const res2 = await fetch(telemetryUrl, { headers: { "Authorization": `Bearer ${jwt2}` } });
+        if (!res2.ok) throw new Error(`HTTP ${res2.status} ${res2.statusText}`);
+        return await res2.json();
+      }
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    return await res.json();
+  }
+
+  function updateUIAndMarker(data) {
+    const latR = parseLatest(data.latitude);
+    const lngR = parseLatest(data.longitude);
+    const satR = parseLatest(data.satellites);
+    const hdopR = parseLatest(data.hdop);
+
+    if (latR.value === null || lngR.value === null) {
+      throw new Error("Telemetry belum ada (latitude/longitude kosong)");
+    }
+
+    lat = latR.value;
+    lng = lngR.value;
+
+    // Update marker saja (TIDAK auto center)
+    marker.setLatLng([lat, lng]);
+
+    // Info panel selalu visible
+    latEl.textContent = lat.toFixed(6);
+    lngEl.textContent = lng.toFixed(6);
+    satEl.textContent = (satR.value === null) ? "—" : String(satR.value);
+    hdopEl.textContent = (hdopR.value === null) ? "—" : String(hdopR.value);
+
+    const lastTs = maxTs(latR.ts, lngR.ts, satR.ts, hdopR.ts);
+    lastEl.textContent = fmtTime(lastTs);
+  }
+
+  async function tick() {
+    try {
+      const data = await fetchTelemetry();
+      updateUIAndMarker(data);
+    } catch (e) {
+      console.warn("Fetch telemetry gagal:", e);
+    }
+  }
+
+  tick();
+  setInterval(tick, 3000);
+</script>
+
+</body>
+</html>

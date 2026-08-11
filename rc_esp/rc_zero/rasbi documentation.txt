@@ -1,0 +1,57 @@
+# Dokumentasi Sistem: zero.py (Raspberry Pi Zero 2W)
+
+File `zero.py` bertindak sebagai penghubung (bridge) utama antara tiga komponen:
+1. **ESP32 (Hardware Control)** via koneksi Serial UART.
+2. **VPS (Signaling/Relay Server)** via koneksi WebSocket (Client).
+3. **Local Web Interface** via web server (FastAPI) yang menyajikan antarmuka UI.
+
+---
+
+## 1. High-Level Flow (Alur Utama)
+
+Saat `zero.py` dijalankan (contoh: `python3 zero.py`), berikut adalah alur eksekusinya:
+
+1. **Boot / Startup**:
+   - `startup()` dipanggil.
+   - Melakukan autentikasi ke Firebase menggunakan email dan password.
+   - Membaca IP address dari interface `wlan0` menggunakan `ioctl`.
+   - Mengirim IP address tersebut ke Firebase Realtime Database (`/rpi_ip`).
+2. **Inisialisasi Serial**:
+   - `open_serial()` dipanggil.
+   - Berusaha membuka koneksi serial ke ESP32 (`/dev/serial0` pada baudrate 115200). Jika gagal, akan terus mencoba (retry) setiap 3 detik.
+   - Referensi koneksi serial disimpan di global variable `_serial_ref`.
+3. **Memulai Parallel Tasks (Lifespan Context)**:
+   FastAPI menggunakan `lifespan` untuk mengatur background tasks saat server hidup. Di sinilah tugas-tugas paralel dimulai:
+   - Menjalankan thread `serial_loop`.
+   - Menjalankan asyncio task `vps_client` (yang mengelola camera streaming & command handler).
+4. **Web Server Running**:
+   - Uvicorn (FastAPI) berjalan di main thread, mendengarkan request di port `8080` (me-serve `web.html`).
+5. **Shutdown**:
+   - Jika server dihentikan (Ctrl+C), `lifespan` akan membatalkan task-task `vps_client`, menutup koneksi serial, mematikan kamera (`picam2.stop()`), dan mematikan aplikasi dengan bersih.
+
+---
+
+## 2. Parallel Tasks & Threads (PENTING)
+
+Untuk menghindari *Blocking I/O* (seperti menunggu balasan serial atau mengambil frame kamera) yang bisa membuat web server macet, `zero.py` menggunakan gabungan dari **Python `threading`** dan **`asyncio`**.
+
+Pemahaman tentang concurrency model ini sangat penting jika kode ini dikembangkan lebih lanjut untuk menghindari **Race Conditions**.
+
+Terdapat **3 Alur Eksekusi Paralel** utama:
+
+### A. Main Thread / Asyncio Event Loop (Uvicorn / FastAPI)
+- **Tugas**: Menangani request HTTP masuk (seperti me-serve `web.html`).
+- **Sifat**: Berjalan secara asynchronous non-blocking (async/await).
+- **Catatan**: Jangan pernah memasukkan operasi yang "blocking" (seperti `time.sleep` panjang, atau `serial.read()` tanpa timeout) di dalam route FastAPI, karena akan memblokir seluruh web server.
+
+### B. Asyncio Tasks: `vps_client()` (Camera/Audio Stream + Command Receiver)
+- **Tugas**: Menjaga koneksi WebSocket ke VPS (`ws://...:8766`). Mengidentifikasi diri sebagai "pi", lalu menjalankan task concurrent:
+  1. **`send_frames(ws)` (Producer)**: Menangkap frame kamera resolusi rendah (`lores`), meng-encode ke JPEG, mengirimkannya ke VPS dengan tag `0x01` (~20fps). Task ini juga secara periodik mengirimkan status rekaman video (`record1` / `record2`) dan mengelola inisiasi/stop perekaman video lokal (`.h264` tanpa audio, di-rename dengan info durasi).
+  2. **`receive_commands(ws)` (Consumer)**: Menerima perintah dari VPS. Pergerakan/mode dikirim ke ESP32 via serial. Perintah `exposure`, `gain`, dan `record` dikonfigurasi ke `picam2`. Perintah `set_audio` akan memicu atau menghentikan task `send_audio`.
+  3. **`send_audio(ws)` (Audio Producer)**: Dijalankan jika toggle audio diaktifkan. Membuka subprocess `arecord` pada perangkat `"plughw:1,0"` dengan format `S16_LE`, rate `48000`, dan channel `1`. Data PCM dikirimkan via WS dengan tag binary `0x02`.
+- **Sifat**: Berjalan secara asynchronous concurrent (menggunakan `asyncio.create_task` dan `asyncio.wait`) di event loop utama.
+ 
+### C. OS Thread (Daemon): `serial_loop()`
+- **Tugas**: Secara terus-menerus membaca (read) data tanggapan yang datang dari ESP32 melalui UART dan mem-print-nya ke layar.
+- **Sifat**: Blocking OS Thread (menggunakan module `threading`). Menggunakan timeout pendek (0.1s) agar tidak sepenuhnya macet, dan menggunakan `ser.in_waiting` untuk mengecek ketersediaan data.
+- **Catatan**: Karena ini thread terpisah, ia bebas melakukan operasi blocking tanpa mengganggu event loop utama. Jika koneksi serial terputus, ia akan mencoba re-connect dan memperbarui referensi `_serial_ref`.

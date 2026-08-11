@@ -12,13 +12,13 @@ def main():
 
 
     # Settings per request
-    CARD = "plughw:2,0"
-    FMT = "S32_LE"
-    RATE = 16000
+    CARD = "plughw:1,0"
+    FMT = "S16_LE"
+    RATE = 48000
     CHANNELS = 1
 
     # Use raw PCM; save as .pcm
-    output = Path("record_16k_32bit.wav")
+    output = Path("record_48k_16bit.wav")
 
     cmd = [
         "arecord",
@@ -26,12 +26,12 @@ def main():
         "-f", FMT,
         "-r", str(RATE),
         "-c", str(CHANNELS),
-        "-d", "5",     # 5 seconds
+        "-d", "10",    # 10 seconds
         str(output)
     ]
 
     try:
-        print(f"Recording 5s @ 16kHz 32-bit to {output} ...")
+        print(f"Recording 10s @ 48kHz 16-bit to {output} ...")
         subprocess.run(cmd, check=True)
         print("Done.")
     except subprocess.CalledProcessError as e:
